@@ -132,19 +132,52 @@ def collect_one_detail_page(url):
 # ==========================================
 st.set_page_config(page_title="공공데이터 크롤러", page_icon="🏢", layout="centered")
 
-st.title("🏢 공공데이터포털 기관별 데이터 크롤링")
-st.markdown("기관명을 입력하면 해당 기관의 모든 공공데이터 목록과 메타데이터를 추출합니다.")
+# 디테일한 디자인을 위한 CSS
+st.markdown("""
+    <style>
+    .title-spacer {
+        margin-bottom: 50px;
+    }
+    div.stButton > button {
+        height: 42px;
+    }
+    div.stButton > button p {
+        display: flex !important;
+        justify-content: center !important;
+        align-items: center !important;
+        gap: 6px !important;
+        margin: 0 !important;
+    }
+    input::placeholder {
+        font-size: 14px !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-# 세션 상태 초기화 (검색 결과 저장용)
+st.title("공공데이터포털 기관별 데이터 크롤링")
+st.markdown("<div class='title-spacer'></div>", unsafe_allow_html=True)
+
+# 세션 상태 초기화
 if "total_pages" not in st.session_state:
     st.session_state.total_pages = 0
 if "target_org" not in st.session_state:
     st.session_state.target_org = ""
 
-# 검색 영역
-org_input = st.text_input("🏢 제공기관명 입력 (예: 한국중부발전(주))")
+st.markdown("**▪&nbsp; 제공기관명 입력** (예: 한국중부발전(주))")
+col1, col2 = st.columns([4, 1]) 
 
-if st.button("🔍 검색"):
+with col1:
+    org_input = st.text_input(
+        "제공기관", 
+        label_visibility="collapsed", 
+        placeholder="기관명을 입력하면 해당 기관의 모든 공공데이터 목록과 메타데이터를 추출합니다."
+    )
+    
+with col2:
+    search_clicked = st.button("검색", use_container_width=True)
+
+# 검색 로직
+if search_clicked:
     if not org_input.strip():
         st.warning("제공기관명을 입력해주세요!")
     else:
@@ -161,16 +194,28 @@ if st.button("🔍 검색"):
 # 검색 결과가 있을 때만 아래 UI 표시
 if st.session_state.total_pages > 0:
     st.markdown("---")
-    st.subheader("📌 추출할 항목 선택")
     
-    # ipywidgets의 체크박스 대신 Streamlit의 멀티셀렉트(다중 선택) 사용
-    selected_columns = st.multiselect(
-        "필요한 컬럼을 선택하세요 (기본값: 전체 선택)",
-        options=ALL_SELECTABLE_COLUMNS,
-        default=ALL_SELECTABLE_COLUMNS
-    )
+    # 📌 괄호 안의 설명을 빼고 아주 깔끔하게 정리했습니다.
+    st.markdown("**▪&nbsp; 추출할 항목 선택**")
     
-    if st.button("🚀 선택한 항목으로 추출 시작", type="primary"):
+    options_with_all = ["모두 선택"] + ALL_SELECTABLE_COLUMNS
+    
+    col_multi, col_btn = st.columns([4, 1])
+    
+    with col_multi:
+        selected_columns = st.multiselect(
+            "항목 선택",
+            options=options_with_all,
+            default=[],
+            placeholder="원하는 항목을 골라주세요", # 📌 Choose options를 한글 안내 문구로 변경!
+            label_visibility="collapsed"
+        )
+        
+    with col_btn:
+        run_clicked = st.button("추출", type="primary", use_container_width=True)
+    
+    # 추출 버튼 클릭 시 로직
+    if run_clicked:
         if not selected_columns:
             st.error("최소 1개 이상의 추출 항목을 선택해주세요!")
         else:
@@ -181,6 +226,12 @@ if st.session_state.total_pages > 0:
                 org = st.session_state.target_org
                 pages = st.session_state.total_pages
                 
+                # '모두 선택'이 포함되어 있으면 전체 컬럼을 가져오도록 처리
+                if "모두 선택" in selected_columns:
+                    target_columns_to_extract = ALL_SELECTABLE_COLUMNS
+                else:
+                    target_columns_to_extract = selected_columns
+
                 detail_urls = []
                 base_list_url = "https://www.data.go.kr/tcs/dss/selectDataSetList.do"
                 encoded_org = urllib.parse.quote(org) if org else ""
@@ -210,30 +261,29 @@ if st.session_state.total_pages > 0:
                         my_bar.progress(progress_percent, text=f"데이터 추출 중... ({idx}/{total_urls} 완료)")
                         rows.append(collect_one_detail_page(url))
                     
-                    # 3단계: 데이터프레임 변환 및 다운로드 준비
+                    # 3단계: 데이터프레임 변환
                     result_df = pd.DataFrame(rows)
-                    final_cols = [c for c in selected_columns if c in result_df.columns]
+                    
+                    # 추출 대상 컬럼(target_columns_to_extract)을 적용
+                    final_cols = [c for c in target_columns_to_extract if c in result_df.columns]
                     result_df = result_df[final_cols]
                     
-                    # 전화번호 엑셀 깨짐 방지
                     if "관리부서 전화번호" in result_df.columns:
                         result_df["관리부서 전화번호"] = result_df["관리부서 전화번호"].apply(
                             lambda x: f"'{x}" if pd.notnull(x) and str(x).startswith("0") and "-" not in str(x) else x
                         )
 
-                    # CSV 데이터를 메모리에 바이트 형태로 저장 (사용자가 다운로드 버튼을 누를 수 있게)
                     csv_data = result_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
                     
                     safe_org_name = org.replace("(", "_").replace(")", "")
                     timestamp = time.strftime("%Y%m%d_%H%M%S")
                     file_name = f"공공데이터_{safe_org_name}_{timestamp}.csv"
                     
-                    my_bar.empty() # 프로그레스 바 숨기기
-                    st.success("🎉 수집이 완료되었습니다! 아래 버튼을 눌러 파일을 다운로드하세요.")
+                    my_bar.empty()
+                    st.success("✅ 수집 완료! 아래 버튼을 눌러 파일을 다운로드하세요.")
                     
-                    # 웹 브라우저를 통한 다운로드 버튼 생성
                     st.download_button(
-                        label="📥 결과 CSV 파일 다운로드",
+                        label="CSV 파일 다운로드",
                         data=csv_data,
                         file_name=file_name,
                         mime="text/csv",
